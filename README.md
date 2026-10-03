@@ -31,17 +31,20 @@ Clips the scorer can't recognize (758 of 9,839) are marked "unreliable" and not 
 
 ## Running it
 
-The page must be served by a web server (opening `index.html` directly as a file won't work, and browsers only allow the microphone on `https://` or `localhost`).
+### On your Windows computer (no commands needed)
 
-**Locally** (from the project folder, in Git Bash):
+1. On GitHub, open the repository, click the green **Code** button, then **Download ZIP**.
+2. Unzip it.
+3. Double-click **`Start Tone Coach.bat`**. A small window opens and the app opens in your browser.
+4. Allow the microphone when the browser asks. Keep the small window open while practicing; close it to stop.
 
-```bash
-python -m http.server 8000
-```
+If Windows shows "Windows protected your PC", click **More info**, then **Run anyway** (this appears for any downloaded script).
 
-Then open http://localhost:8000.
+### Other ways
 
-**For students:** publish with GitHub Pages (repository Settings → Pages → deploy from the `main` branch). The site will be at `https://lanshengconsulting.github.io/Chinese/`.
+The page must be served by a web server: opening `index.html` directly as a file won't work, and browsers only allow the microphone on `https://` or `localhost`. Any static server works, e.g. `python -m http.server 8000`, then open http://localhost:8000.
+
+**For students:** host the folder on any static hosting service. GitHub Pages works for public repositories (or private ones on a paid GitHub plan).
 
 ## Project layout
 
@@ -54,6 +57,7 @@ Then open http://localhost:8000.
 | `js/pinyin.js` | Tone marks and pinyin input parsing |
 | `audio/` | The reference clips, named `<syllable><tone>_<speaker>_MP3.mp3` (`v` = ü) |
 | `data/references.json` | Pre-computed pitch contours of every clip |
+| `Start Tone Coach.bat`, `launcher/serve.ps1` | Double-click launcher for Windows |
 | `tools/build-references.mjs` | Regenerates `data/references.json` and runs the accuracy test |
 
 If clips are added or replaced, regenerate the data (needs Node.js and ffmpeg):
