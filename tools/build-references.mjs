@@ -47,11 +47,10 @@ async function analyzeAll(files) {
   return { clips, failed };
 }
 
-async function main() {
-  const files = (await readdir(AUDIO_DIR)).filter((f) => NAME.test(f)).sort();
-  console.log(`Analyzing ${files.length} clips...`);
-  const { clips, failed } = await analyzeAll(files);
-
+// Turns analyzed clips ({ syllable, tone, speaker, contour }) into the
+// reference data, flags clips whose tone is not recognized against the other
+// speakers, and reports the self-test results.
+export function buildReferences(clips) {
   // Each speaker's baseline is the median pitch over all of their clips.
   const bySpeaker = {};
   for (const c of clips) (bySpeaker[c.speaker] ??= []).push(c.contour.mean);
@@ -59,7 +58,8 @@ async function main() {
     Object.entries(bySpeaker).sort().map(([spk, means]) => [spk, round(median(means))]));
 
   const syllables = {};
-  for (const c of clips.sort((a, b) => (a.syllable + a.tone + a.speaker).localeCompare(b.syllable + b.tone + b.speaker))) {
+  const key = (c) => c.syllable + c.tone + c.speaker;
+  for (const c of [...clips].sort((a, b) => key(a).localeCompare(key(b)))) {
     ((syllables[c.syllable] ??= {})[c.tone] ??= {})[c.speaker] = {
       s: c.contour.shape.map(round),
       r: round(c.contour.mean - baselines[c.speaker]),
@@ -75,15 +75,13 @@ async function main() {
   for (const [syl, tones] of Object.entries(syllables)) {
     for (const [tone, speakers] of Object.entries(tones)) {
       for (const [spk, ref] of Object.entries(speakers)) {
-        const vector = ref.s.map((v) => v + ref.r);
-        const heard = closest(toneDistances(vector, tones, true, spk));
+        const heard = closest(toneDistances({ shape: ref.s, reg: ref.r }, tones, spk));
         confusion[tone][heard]++;
         if (heard !== tone) unreliable.push([syl, tone, spk]);
       }
     }
   }
-  const total = clips.length;
-  const accuracy = (total - unreliable.length) / total;
+  const accuracy = (clips.length - unreliable.length) / clips.length;
   for (const [syl, tone, spk] of unreliable) syllables[syl][tone][spk].x = 1;
 
   // Typical pitch level of each tone relative to the speaker's baseline.
@@ -99,19 +97,27 @@ async function main() {
     for (const t of TONES) if (!Object.values(tones[t] ?? {}).some((r) => !r.x)) missing.push(syl + t);
   }
 
-  await writeFile(OUT, JSON.stringify({
-    meta: { baselines, toneLevels, selfTestAccuracy: round(accuracy * 100) },
-    syllables,
-  }));
-
-  console.log(`Wrote ${total} contours for ${Object.keys(syllables).length} syllables to data/references.json`);
-  if (failed.length) console.log(`No usable pitch in ${failed.length} clips: ${failed.join(', ')}`);
-  console.log(`Self-test tone accuracy: ${(accuracy * 100).toFixed(1)}%`);
-  console.log('Confusion (rows = true tone, columns = heard as 1/2/3/4):');
-  for (const t of TONES) console.log(`  ${t}: ${TONES.map((h) => String(confusion[t][h]).padStart(5)).join('')}`);
-  console.log(`${unreliable.length} clips marked unreliable (still playable, not used for scoring).`);
-  if (missing.length) console.log(`No reliable reference for: ${missing.join(', ')}`);
-  console.log('Typical tone levels vs speaker baseline (semitones):', toneLevels);
+  return {
+    data: { meta: { baselines, toneLevels, selfTestAccuracy: round(accuracy * 100) }, syllables },
+    report: { accuracy, confusion, unreliable: unreliable.length, missing },
+  };
 }
 
-main();
+async function main() {
+  const files = (await readdir(AUDIO_DIR)).filter((f) => NAME.test(f)).sort();
+  console.log(`Analyzing ${files.length} clips...`);
+  const { clips, failed } = await analyzeAll(files);
+  const { data, report } = buildReferences(clips);
+  await writeFile(OUT, JSON.stringify(data));
+
+  console.log(`Wrote ${clips.length} contours for ${Object.keys(data.syllables).length} syllables to data/references.json`);
+  if (failed.length) console.log(`No usable pitch in ${failed.length} clips: ${failed.join(', ')}`);
+  console.log(`Self-test tone accuracy: ${(report.accuracy * 100).toFixed(1)}%`);
+  console.log('Confusion (rows = true tone, columns = heard as 1/2/3/4):');
+  for (const t of TONES) console.log(`  ${t}: ${TONES.map((h) => String(report.confusion[t][h]).padStart(5)).join('')}`);
+  console.log(`${report.unreliable} clips marked unreliable (still playable, not used for scoring).`);
+  if (report.missing.length) console.log(`No reliable reference for: ${report.missing.join(', ')}`);
+  console.log('Typical tone levels vs speaker baseline (semitones):', data.meta.toneLevels);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) main();

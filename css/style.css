@@ -138,7 +138,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .legend { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; font-size: 0.9rem; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend .link { margin-left: auto; }
+.legend .mine { margin-left: auto; gap: 14px; }
 .swatch { display: inline-block; width: 18px; height: 10px; border-radius: 3px; }
 .swatch.band { background: var(--ref-band); border: 2px dashed var(--ref); }
 .swatch.you { background: var(--you); }
