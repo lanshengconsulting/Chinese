@@ -17,7 +17,9 @@ export const PARAMS = {
   voicedDip: 0.3,      // a YIN dip this clear means the frame is certainly voiced
   quiet: 0.06,         // frames quieter than this fraction of the peak are silence
   edge: 0.12,          // the syllable ends where loudness falls below this fraction
-  unvoicedCost: 0.6,   // path cost of calling a frame unvoiced
+  unvoicedCost: 0.5,   // path cost of calling a quiet frame unvoiced
+  unvoicedLoud: 0.5,   // extra cost for loud frames (at peak loudness): the
+                       // breathy or creaky end of a tone is still voice
   jumpCost: 0.12,      // path cost per semitone of pitch change between frames
   voicingCost: 0.25,   // path cost of switching between voiced and unvoiced
   maxGap: 10,          // bridge unvoiced gaps up to 100 ms (creaky 3rd tones)
@@ -121,7 +123,7 @@ export function findSyllable(rms, dips, sr) {
 // and after the voice, never in the middle. This rejects octave errors and
 // room-echo artefacts.
 export function choosePath(rms, dips, seg, sr) {
-  const { unvoicedCost, jumpCost, voicingCost, quiet, step, maxJump } = PARAMS;
+  const { unvoicedCost, unvoicedLoud, jumpCost, voicingCost, quiet, step, maxJump } = PARAMS;
   const grid = pitchGrid(sr);
   const S = grid.st.length;
   const PRE = S, POST = S + 1;
@@ -135,7 +137,7 @@ export function choosePath(rms, dips, seg, sr) {
     const out = new Float64Array(S + 2);
     const silent = !d || rms[t] < seg.peak * quiet;
     for (let s = 0; s < S; s++) out[s] = silent ? 1.5 : dipAt(d, grid.tau[s]);
-    out[PRE] = out[POST] = silent ? 0 : unvoicedCost;
+    out[PRE] = out[POST] = silent ? 0 : unvoicedCost + unvoicedLoud * (rms[t] / seg.peak);
     return out;
   };
 

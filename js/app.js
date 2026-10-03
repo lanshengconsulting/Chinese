@@ -145,6 +145,7 @@ async function capture(onDone, labelEl) {
 
 function onPracticeRecorded(contour) {
   if (!contour) {
+    $('result').hidden = true;
     setMessage("I couldn't hear a clear voice. Speak a bit louder, closer to the microphone, and try again.", true);
     return;
   }

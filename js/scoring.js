@@ -41,20 +41,22 @@ export function studentVector(contour, baseline) {
 
 // How contours are compared (exported so experiments can adjust them).
 export const MATCH = {
-  regWeight: 0.6,     // weight of a pitch-level difference beyond regFree
-  regFree: 1.5,       // pitch-level differences up to this (semitones) are free
-  prefixes: [1, 0.8, 0.6], // also match the opening part of a native contour
-  prefixPenalty: 1.0, // cost (semitones) of matching only 60% of a contour, scaled
+  regWeight: 0.4,     // weight of a pitch-level difference beyond regFree
+  regFree: 2,         // pitch-level differences up to this (semitones) are free
+  prefixes: [1, 0.8, 0.6, 0.45], // also match the opening part of a 4th tone
+  prefixPenalty: 0.6, // cost (semitones) of matching only 60% of a contour, scaled
+  prefixTones: ['4'], // tones whose quiet end room echo can hide
 };
 
-// A reference contour and its opening parts. In a room, the echo of a loud
-// start can hide the quiet end of a tone (most often the end of a 4th tone),
-// so the start alone must still be recognizable.
+// A reference contour and, for a 4th tone, its opening parts. In a room, the
+// echo of the loud, high start of a 4th tone can hide its quiet, low end, so
+// the start alone must still be recognizable.
 const variantCache = new WeakMap();
-function variants(ref) {
+function variants(ref, tone) {
   let list = variantCache.get(ref);
   if (list) return list;
-  list = MATCH.prefixes.map((f) => {
+  const fractions = MATCH.prefixTones.includes(tone) ? MATCH.prefixes : [1];
+  list = fractions.map((f) => {
     const n = ref.s.length;
     const part = f === 1 ? ref.s : resample(ref.s.slice(0, Math.max(2, Math.round(n * f))), n);
     const mean = part.reduce((a, b) => a + b, 0) / n;
@@ -80,9 +82,9 @@ function resample(values, n) {
 
 // Distance between a student contour ({ shape, reg }, reg = pitch level
 // relative to their baseline or null) and one reference recording.
-export function refDistance(student, ref) {
+export function refDistance(student, ref, tone) {
   let best = Infinity;
-  for (const v of variants(ref)) {
+  for (const v of variants(ref, tone)) {
     const shapeD = contourDistance(student.shape, v.shape);
     const regD = student.reg == null ? 0
       : MATCH.regWeight * Math.max(0, Math.abs(student.reg - v.reg) - MATCH.regFree);
@@ -103,7 +105,7 @@ export function toneDistances(student, sylRefs, excludeSpeaker = null) {
   const out = {};
   for (const tone of TONES) {
     const ds = usable(sylRefs[tone], excludeSpeaker)
-      .map(([, r]) => refDistance(student, r))
+      .map(([, r]) => refDistance(student, r, tone))
       .sort((x, y) => x - y);
     if (!ds.length) continue;
     const k = Math.min(2, ds.length);

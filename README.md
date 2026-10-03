@@ -16,13 +16,19 @@ Everything runs in the browser. No audio leaves the student's computer.
 
 ## Accuracy
 
-`tools/build-references.mjs` tests the scorer on the audio bank itself: each clip is judged against the *other five* speakers. Current result: **92.3%** of native clips are recognized as the correct tone.
+Two checks, both run on the audio bank itself:
 
-The main remaining confusions:
-- **4th tone heard as 1st.** Some male 4th-tone clips end in creaky voice, which has no measurable pitch, so only the start of the fall is visible.
-- **3rd tone heard as 2nd.** Several speakers finish their isolated 3rd tone with a strong rise, which overlaps with the 2nd tone.
+- **Self-test** (`tools/build-references.mjs`): each clip is judged against the *other five* speakers. **92.4%** of native clips are recognized as the correct tone.
+- **Student simulation:** each speaker in turn plays the student. They do the 4-syllable voice setup, then their clips are scored against the other five speakers, with background noise and room echo added. With mild room echo, native tones are recognized 99% (1st), 98% (2nd), 68% (3rd) and 81% (4th) of the time.
 
-Clips the scorer can't recognize (758 of 9,839) are marked "unreliable" and not used as scoring references. They can still be played.
+What makes it hard:
+- **Room echo hides the end of a 4th tone.** The echo of its loud, high start covers its quiet, low end, so the app compares the opening part of the fall too.
+- **The 3rd tone is the weakest.** Several reference speakers finish an isolated 3rd tone with a strong rise, which overlaps with the 2nd tone.
+- **The voice setup can be off.** Pitch level counts only beyond a tolerance, and every practice attempt refines the setup, so a poor setup recording corrects itself.
+
+Clips the scorer can't recognize (745 of 9,839, mostly male 4th tones ending in creaky voice) are marked "unreliable" and not used as scoring references. They can still be played.
+
+If a tone keeps scoring wrong for someone, press **⤓ Save** under the result to download that recording, so it can be analyzed.
 
 ## Limitations
 
