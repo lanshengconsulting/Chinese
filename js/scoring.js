@@ -39,6 +39,58 @@ export function studentVector(contour, baseline) {
   return contour.shape.map((v) => v + contour.mean - baseline);
 }
 
+// How contours are compared (exported so experiments can adjust them).
+export const MATCH = {
+  regWeight: 0.6,     // weight of a pitch-level difference beyond regFree
+  regFree: 1.5,       // pitch-level differences up to this (semitones) are free
+  prefixes: [1, 0.8, 0.6], // also match the opening part of a native contour
+  prefixPenalty: 1.0, // cost (semitones) of matching only 60% of a contour, scaled
+};
+
+// A reference contour and its opening parts. In a room, the echo of a loud
+// start can hide the quiet end of a tone (most often the end of a 4th tone),
+// so the start alone must still be recognizable.
+const variantCache = new WeakMap();
+function variants(ref) {
+  let list = variantCache.get(ref);
+  if (list) return list;
+  list = MATCH.prefixes.map((f) => {
+    const n = ref.s.length;
+    const part = f === 1 ? ref.s : resample(ref.s.slice(0, Math.max(2, Math.round(n * f))), n);
+    const mean = part.reduce((a, b) => a + b, 0) / n;
+    return {
+      shape: part.map((v) => v - mean),
+      reg: ref.r + mean,
+      penalty: MATCH.prefixPenalty * (1 - f) / 0.4,
+    };
+  });
+  variantCache.set(ref, list);
+  return list;
+}
+
+function resample(values, n) {
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const pos = (i * (values.length - 1)) / (n - 1);
+    const lo = Math.floor(pos), hi = Math.min(lo + 1, values.length - 1);
+    out[i] = values[lo] + (values[hi] - values[lo]) * (pos - lo);
+  }
+  return out;
+}
+
+// Distance between a student contour ({ shape, reg }, reg = pitch level
+// relative to their baseline or null) and one reference recording.
+export function refDistance(student, ref) {
+  let best = Infinity;
+  for (const v of variants(ref)) {
+    const shapeD = contourDistance(student.shape, v.shape);
+    const regD = student.reg == null ? 0
+      : MATCH.regWeight * Math.max(0, Math.abs(student.reg - v.reg) - MATCH.regFree);
+    best = Math.min(best, Math.hypot(shapeD, regD) + v.penalty);
+  }
+  return best;
+}
+
 const refVector = (ref, useRegister) => (useRegister ? ref.s.map((v) => v + ref.r) : ref.s);
 
 // Usable references for one tone of a syllable ({ speaker: ref }).
@@ -47,11 +99,11 @@ function usable(toneRefs, excludeSpeaker) {
 }
 
 // Per tone, the average distance to the two closest native speakers.
-export function toneDistances(vector, sylRefs, useRegister, excludeSpeaker = null) {
+export function toneDistances(student, sylRefs, excludeSpeaker = null) {
   const out = {};
   for (const tone of TONES) {
     const ds = usable(sylRefs[tone], excludeSpeaker)
-      .map(([, r]) => contourDistance(vector, refVector(r, useRegister)))
+      .map(([, r]) => refDistance(student, r))
       .sort((x, y) => x - y);
     if (!ds.length) continue;
     const k = Math.min(2, ds.length);
@@ -73,7 +125,8 @@ const WRONG_TONE_CAP = 40;
 export function judge(contour, sylRefs, target, baseline) {
   const useRegister = baseline != null;
   const vector = studentVector(contour, baseline);
-  const distances = toneDistances(vector, sylRefs, useRegister);
+  const student = { shape: contour.shape, reg: useRegister ? contour.mean - baseline : null };
+  const distances = toneDistances(student, sylRefs);
   const heard = closestTone(distances);
   const d = distances[target];
   let score = Math.round(100 * Math.min(1, Math.max(0, (ZERO - d) / (ZERO - PERFECT))));

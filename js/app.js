@@ -1,7 +1,7 @@
 import { analyze } from './pitch.js';
 import { judge, TONES } from './scoring.js';
 import { parse, plain, withTone } from './pinyin.js';
-import { record, toAnalysisRate, play } from './recorder.js';
+import { record, toAnalysisRate, play, toWav } from './recorder.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -12,30 +12,50 @@ const TONE_INFO = {
   4: ['4th tone', 'falling'],
 };
 const ORDINAL = { 1: '1st', 2: '2nd', 3: '3rd', 4: '4th' };
-const BASELINE_KEY = 'toneCoach.baseline';
+// Pitch-level estimates of the student's normal voice, from the voice setup
+// and every practice attempt. Their median is the baseline, so a poor setup
+// recording corrects itself as the student practices.
+const VOICE_KEY = 'toneCoach.voice.v2';
+const MAX_ESTIMATES = 40;
+const SETUP_WEIGHT = 3; // each setup recording counts like this many attempts
 
 const state = {
   data: null,
   syl: 'ma',
   tone: '1',
-  baseline: loadBaseline(),
+  estimates: loadEstimates(),
+  baseline: null,
   recording: null,
   lastAudio: null,
   history: [],
 };
+state.baseline = medianOf(state.estimates);
 
-function loadBaseline() {
-  try {
-    const v = parseFloat(localStorage.getItem(BASELINE_KEY));
-    return Number.isFinite(v) ? v : null;
-  } catch { return null; }
+// Needs a few recordings before the baseline is trusted.
+function medianOf(values) {
+  if (values.length < 4) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-function saveBaseline(v) {
-  state.baseline = v;
-  try { localStorage.setItem(BASELINE_KEY, String(v)); } catch { /* storage unavailable */ }
+function loadEstimates() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VOICE_KEY));
+    return Array.isArray(v) ? v.filter(Number.isFinite) : [];
+  } catch { return []; }
+}
+
+function saveEstimates(estimates) {
+  state.estimates = estimates.slice(-MAX_ESTIMATES);
+  state.baseline = medianOf(state.estimates);
+  try { localStorage.setItem(VOICE_KEY, JSON.stringify(state.estimates)); } catch { /* storage unavailable */ }
   renderVoiceStatus();
 }
+
+// What this recording says about the student's normal pitch, given the tone
+// they were asked to say.
+const voiceEstimate = (contour, tone) => contour.mean - state.data.meta.toneLevels[tone];
 
 const audioFile = (syl, tone, spk) => `audio/${syl}${tone}_${spk}_MP3.mp3`;
 
@@ -132,6 +152,7 @@ function onPracticeRecorded(contour) {
   const { syl, tone } = state;
   const result = judge(contour, state.data.syllables[syl], tone, state.baseline);
   showResult(result);
+  saveEstimates([...state.estimates, voiceEstimate(contour, tone)]);
   state.history.unshift({ text: withTone(syl, tone), score: result.score });
   state.history.length = Math.min(state.history.length, 10);
   renderHistory();
@@ -233,14 +254,13 @@ function openSetup() {
   recordBtn.onclick = () => capture((contour) => {
     if (!contour) { msg("I couldn't hear a clear voice. Try again a bit louder.", true); return; }
     const t = TONES[step];
-    estimates.push(contour.mean - state.data.meta.toneLevels[t]);
+    estimates.push(voiceEstimate(contour, t));
     step++;
     mark();
     if (step < TONES.length) {
       msg(`Now say "${withTone('ma', TONES[step])}".`);
     } else {
-      estimates.sort((a, b) => a - b);
-      saveBaseline((estimates[1] + estimates[2]) / 2);
+      saveEstimates(estimates.flatMap((e) => Array(SETUP_WEIGHT).fill(e)));
       msg('All set!');
       setTimeout(() => $('setup').close(), 700);
     }
@@ -277,6 +297,14 @@ async function init() {
   $('record').addEventListener('click', () => capture(onPracticeRecorded, $('record-label')));
   $('play-mine').addEventListener('click', () => state.lastAudio && play(state.lastAudio.samples, state.lastAudio.sampleRate));
   $('voice-status').addEventListener('click', openSetup);
+  $('save-mine').addEventListener('click', () => {
+    if (!state.lastAudio) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(toWav(state.lastAudio.samples, state.lastAudio.sampleRate));
+    a.download = `${state.syl}${state.tone}_attempt_${Date.now() % 100000}.wav`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
 
   renderVoiceStatus();
   render();

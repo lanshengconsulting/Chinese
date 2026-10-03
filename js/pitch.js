@@ -7,37 +7,41 @@ export const CONTOUR_POINTS = 30;   // contours are resampled to this many point
 
 const HOP = 160;                    // 10 ms step
 
-// Tunable analysis settings (exported so tools/evaluate.mjs can experiment).
+// Tunable analysis settings (exported so experiments can adjust them).
 export const PARAMS = {
   frame: 480,          // 30 ms analysis window
   f0Min: 60,
   f0Max: 500,
-  threshold: 0.2,      // YIN: accept the first dip below this
-  fallback: 0.45,      // YIN: else accept the deepest dip if below this (0 = off)
-  quiet: 0.08,         // frames quieter than this fraction of the peak are ignored
+  step: 0.25,          // pitch grid resolution in semitones
+  maxJump: 4,          // largest pitch change between frames (semitones)
+  voicedDip: 0.3,      // a YIN dip this clear means the frame is certainly voiced
+  quiet: 0.06,         // frames quieter than this fraction of the peak are silence
+  edge: 0.12,          // the syllable ends where loudness falls below this fraction
+  unvoicedCost: 0.6,   // path cost of calling a frame unvoiced
+  jumpCost: 0.12,      // path cost per semitone of pitch change between frames
+  voicingCost: 0.25,   // path cost of switching between voiced and unvoiced
   maxGap: 10,          // bridge unvoiced gaps up to 100 ms (creaky 3rd tones)
   minFrames: 5,        // fewer voiced frames than this cannot be judged
 };
 
-// YIN fundamental-frequency estimate for every frame.
-// Returns { f0: Float32Array (0 = unvoiced), rms: Float32Array }.
+const toSemitones = (hz) => 12 * Math.log2(hz / 100);
+
+// YIN analysis. For every frame returns its loudness and its cumulative mean
+// normalised difference function (low values at likely pitch periods).
 export function trackPitch(samples, sr = SAMPLE_RATE) {
-  const { frame: FRAME, f0Min: F0_MIN, f0Max: F0_MAX, threshold: YIN_THRESHOLD } = PARAMS;
-  const tauMin = Math.floor(sr / F0_MAX);
-  const tauMax = Math.ceil(sr / F0_MIN);
+  const { frame: FRAME, f0Min } = PARAMS;
+  const tauMax = Math.ceil(sr / f0Min) + 1;
   const nFrames = Math.max(0, Math.floor((samples.length - FRAME - tauMax) / HOP) + 1);
-  const f0 = new Float32Array(nFrames);
   const rms = new Float32Array(nFrames);
-  const d = new Float32Array(tauMax + 1);
+  const dips = [];
 
   for (let i = 0; i < nFrames; i++) {
     const start = i * HOP;
     let energy = 0;
     for (let j = 0; j < FRAME; j++) energy += samples[start + j] ** 2;
     rms[i] = Math.sqrt(energy / FRAME);
-    if (rms[i] < 1e-4) continue;
-
-    // Difference function and cumulative mean normalised difference.
+    if (rms[i] < 1e-4) { dips.push(null); continue; }
+    const d = new Float32Array(tauMax + 1);
     let running = 0;
     d[0] = 1;
     for (let tau = 1; tau <= tauMax; tau++) {
@@ -49,41 +53,131 @@ export function trackPitch(samples, sr = SAMPLE_RATE) {
       running += sum;
       d[tau] = running > 0 ? (sum * tau) / running : 1;
     }
-
-    let best = -1;
-    for (let tau = tauMin; tau <= tauMax; tau++) {
-      if (d[tau] < YIN_THRESHOLD) {
-        while (tau + 1 <= tauMax && d[tau + 1] < d[tau]) tau++;
-        best = tau;
-        break;
-      }
-    }
-    if (best < 0 && PARAMS.fallback) {
-      let min = tauMin;
-      for (let tau = tauMin; tau <= tauMax; tau++) if (d[tau] < d[min]) min = tau;
-      if (d[min] < PARAMS.fallback) best = min;
-    }
-    if (best < 0) continue;
-
-    // Parabolic interpolation around the minimum for sub-sample accuracy.
-    let tau = best;
-    if (best > tauMin && best < tauMax) {
-      const a = d[best - 1], b = d[best], c = d[best + 1];
-      const denom = a - 2 * b + c;
-      if (denom !== 0) tau = best + (a - c) / (2 * denom);
-    }
-    f0[i] = sr / tau;
+    dips.push(d);
   }
-
-  // Frames much quieter than the loudest part are background noise, not voice.
-  let peak = 0;
-  for (const r of rms) peak = Math.max(peak, r);
-  for (let i = 0; i < nFrames; i++) if (rms[i] < peak * PARAMS.quiet) f0[i] = 0;
-
-  return { f0, rms };
+  return { rms, dips, sr };
 }
 
-const toSemitones = (hz) => 12 * Math.log2(hz / 100);
+// Pitch grid shared by all frames.
+function pitchGrid(sr) {
+  const lo = toSemitones(PARAMS.f0Min), hi = toSemitones(PARAMS.f0Max);
+  const st = [], tau = [];
+  for (let v = lo; v <= hi; v += PARAMS.step) {
+    st.push(v);
+    tau.push(sr / (100 * 2 ** (v / 12)));
+  }
+  return { st, tau };
+}
+
+function dipAt(d, tau) {
+  const i = Math.floor(tau), f = tau - i;
+  return Math.min(1, d[i] * (1 - f) + d[i + 1] * f);
+}
+
+// Deepest YIN dip of a frame within the allowed pitch range.
+function clearest(d, sr) {
+  if (!d) return 1;
+  let min = 1;
+  for (let tau = Math.floor(sr / PARAMS.f0Max); tau < d.length; tau++) min = Math.min(min, d[tau]);
+  return min;
+}
+
+// The syllable is the loudest stretch that contains clear voicing. Short
+// noises (clicks, breaths) and sounds after the syllable are left out.
+export function findSyllable(rms, dips, sr) {
+  const n = rms.length;
+  let peak = 0;
+  for (const r of rms) peak = Math.max(peak, r);
+  if (!peak) return null;
+
+  // Loudness of clearly voiced frames, summed over 50 ms.
+  const voiced = Array.from(rms, (r, i) => (clearest(dips[i], sr) < PARAMS.voicedDip ? r : 0));
+  let best = -1, bestSum = 0;
+  for (let i = 0; i < n; i++) {
+    let sum = 0;
+    for (let k = Math.max(0, i - 2); k <= Math.min(n - 1, i + 2); k++) sum += voiced[k];
+    if (sum > bestSum) { bestSum = sum; best = i; }
+  }
+  if (best < 0) return null;
+
+  // Grow outwards while it is loud enough, stepping over short dips.
+  const edge = peak * PARAMS.edge;
+  const grow = (from, step) => {
+    let last = from, i = from;
+    while (i + step >= 0 && i + step < n) {
+      i += step;
+      if (rms[i] >= edge) last = i;
+      else if (Math.abs(i - last) > 5) break;
+    }
+    return last;
+  };
+  return { start: grow(best, -1), end: grow(best, 1), peak };
+}
+
+// Chooses one pitch per frame so that the path is both clear (deep YIN dips)
+// and smooth (small frame-to-frame changes). Every pitch on a fine grid is
+// considered in every frame, so a noisy moment cannot make the track lose its
+// place. A syllable is voiced in one piece: the path may be unvoiced before
+// and after the voice, never in the middle. This rejects octave errors and
+// room-echo artefacts.
+export function choosePath(rms, dips, seg, sr) {
+  const { unvoicedCost, jumpCost, voicingCost, quiet, step, maxJump } = PARAMS;
+  const grid = pitchGrid(sr);
+  const S = grid.st.length;
+  const PRE = S, POST = S + 1;
+  const reach = Math.round(maxJump / step);
+  const free = 0.3 / step;
+  const move = new Float64Array(reach + 1);
+  for (let k = 0; k <= reach; k++) move[k] = jumpCost * Math.max(0, k - free) * step;
+
+  const emit = (t) => {
+    const d = dips[t];
+    const out = new Float64Array(S + 2);
+    const silent = !d || rms[t] < seg.peak * quiet;
+    for (let s = 0; s < S; s++) out[s] = silent ? 1.5 : dipAt(d, grid.tau[s]);
+    out[PRE] = out[POST] = silent ? 0 : unvoicedCost;
+    return out;
+  };
+
+  const T = seg.end - seg.start + 1;
+  let prev = emit(seg.start);
+  prev[POST] = Infinity;
+  for (let s = 0; s < S; s++) prev[s] += voicingCost;
+  const back = [];
+  for (let t = 1; t < T; t++) {
+    const e = emit(seg.start + t);
+    const cur = new Float64Array(S + 2);
+    const from = new Int16Array(S + 2);
+    let bestVoiced = Infinity, bestVoicedArg = 0;
+    for (let s = 0; s < S; s++) if (prev[s] < bestVoiced) { bestVoiced = prev[s]; bestVoicedArg = s; }
+    for (let s = 0; s < S; s++) {
+      let best = prev[PRE] + voicingCost, arg = PRE;
+      for (let k = -reach; k <= reach; k++) {
+        const q = s + k;
+        if (q < 0 || q >= S) continue;
+        const c = prev[q] + move[Math.abs(k)];
+        if (c < best) { best = c; arg = q; }
+      }
+      cur[s] = best + e[s];
+      from[s] = arg;
+    }
+    cur[PRE] = prev[PRE] + e[PRE];
+    from[PRE] = PRE;
+    const end = bestVoiced + voicingCost;
+    cur[POST] = (prev[POST] <= end ? prev[POST] : end) + e[POST];
+    from[POST] = prev[POST] <= end ? POST : bestVoicedArg;
+    back.push(from);
+    prev = cur;
+  }
+  let k = POST;
+  for (let s = 0; s < S; s++) if (prev[s] < prev[k]) k = s;
+  const path = new Array(T);
+  for (let t = T - 1; t >= 0; t--) {
+    path[t] = k < S ? grid.st[k] : NaN;
+    if (t > 0) k = back[t - 1][k];
+  }
+  return path;
+}
 
 function median(values) {
   const s = [...values].sort((a, b) => a - b);
@@ -103,65 +197,29 @@ export function resample(values, n) {
   return out;
 }
 
-// Removes pitch-tracking errors by following the pitch from its steadiest
-// stretch outwards. Real voices move at most about one semitone per 10 ms, so
-// a bigger jump is an octave error (corrected) or a glitch (discarded).
-function followPitch(st) {
-  let anchor = null;
-  for (let i = 0; i < st.length; i++) {
-    if (Number.isNaN(st[i])) continue;
-    let j = i;
-    while (j + 1 < st.length && Math.abs(st[j + 1] - st[j]) <= 1) j++;
-    if (!anchor || j - i > anchor.end - anchor.start) anchor = { start: i, end: j };
-    i = j;
-  }
-  if (!anchor) return st;
+// The syllable's pitch contour in semitones, or null when there is not
+// enough voiced speech to judge.
+export function analyze(samples) {
+  const { rms, dips, sr } = trackPitch(samples);
+  const seg = findSyllable(rms, dips, sr);
+  if (!seg) return null;
+  const path = choosePath(rms, dips, seg, sr);
 
-  const out = st.map((v, i) => (i >= anchor.start && i <= anchor.end ? v : NaN));
-  for (const dir of [1, -1]) {
-    let lastIdx = dir > 0 ? anchor.end : anchor.start;
-    for (let i = lastIdx + dir; i >= 0 && i < st.length; i += dir) {
-      if (Number.isNaN(st[i])) continue;
-      const last = out[lastIdx];
-      const gap = Math.abs(i - lastIdx);
-      const tolerance = 1.5 + 0.8 * gap;
-      // Prefer the measured value; only treat it as an octave error when it
-      // cannot be reached otherwise.
-      const candidate = [st[i], st[i] - 12, st[i] + 12]
-        .find((v) => Math.abs(v - last) <= tolerance);
-      if (candidate !== undefined) {
-        out[i] = candidate;
-        lastIdx = i;
-      }
-    }
-  }
-  return out;
-}
-
-// Turns a frame-level f0 track into the syllable's pitch contour in semitones.
-// Returns null when there is not enough voiced speech to judge.
-export function extractContour(f0) {
-  const st = followPitch(Array.from(f0, (hz) => (hz > 0 ? toSemitones(hz) : NaN)));
-
-  // Group voiced frames into segments, bridging short gaps.
-  const segments = [];
-  let current = null;
-  let gap = 0;
-  for (let i = 0; i < st.length; i++) {
-    if (!Number.isNaN(st[i])) {
-      if (current && gap <= PARAMS.maxGap) current.end = i;
-      else segments.push((current = { start: i, end: i, count: 0 }));
-      current.count++;
+  // Keep the longest voiced stretch, bridging short unvoiced gaps.
+  let best = null, cur = null, gap = 0;
+  for (let i = 0; i < path.length; i++) {
+    if (!Number.isNaN(path[i])) {
+      if (cur && gap <= PARAMS.maxGap) cur.end = i;
+      else cur = { start: i, end: i, count: 0 };
+      cur.count++;
       gap = 0;
-    } else if (current) {
+      if (!best || cur.count > best.count) best = cur;
+    } else if (cur) {
       gap++;
     }
   }
-
-  // The syllable is the segment with the most voiced frames.
-  const seg = segments.reduce((a, b) => (!a || b.count > a.count ? b : a), null);
-  if (!seg || seg.count < PARAMS.minFrames) return null;
-  const frames = st.slice(seg.start, seg.end + 1);
+  if (!best || best.count < PARAMS.minFrames) return null;
+  const frames = path.slice(best.start, best.end + 1);
 
   // Fill bridged gaps by linear interpolation.
   for (let i = 0; i < frames.length; i++) {
@@ -186,10 +244,6 @@ export function extractContour(f0) {
   return {
     shape: points.map((v) => v - mean), // contour relative to its own average pitch
     mean,                               // average pitch, semitones re 100 Hz
-    duration: (seg.end - seg.start + 1) * HOP / SAMPLE_RATE,
+    duration: frames.length * HOP / SAMPLE_RATE,
   };
-}
-
-export function analyze(samples) {
-  return extractContour(trackPitch(samples).f0);
 }
