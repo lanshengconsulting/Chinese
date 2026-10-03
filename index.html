@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tone Coach</title>
+  <meta name="description" content="Practice Mandarin tones and get instant feedback compared with native speakers.">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Tone Coach</h1>
+      <p class="sub">Say a syllable. See how your tone compares with six native speakers.</p>
+    </div>
+    <button id="voice-status" class="chip" type="button">Set up my voice</button>
+  </header>
+
+  <main>
+    <section class="card practice">
+      <div class="pick">
+        <label for="syllable-input" class="visually-hidden">Syllable</label>
+        <input id="syllable-input" list="syllable-list" placeholder="Syllable, e.g. ma3 or lü" autocomplete="off" spellcheck="false">
+        <datalist id="syllable-list"></datalist>
+        <button id="random" type="button" class="secondary">Random</button>
+      </div>
+
+      <div class="target">
+        <div id="target-pinyin" class="pinyin">mā</div>
+        <div id="target-name" class="tone-name">1st tone · high and level</div>
+      </div>
+
+      <div id="tones" class="tones" role="radiogroup" aria-label="Tone"></div>
+
+      <div class="actions">
+        <div class="listen">
+          <button id="listen" type="button" class="secondary">▶ Listen</button>
+          <label for="speaker" class="visually-hidden">Voice</label>
+          <select id="speaker">
+            <option value="FV1">Female 1</option>
+            <option value="FV2">Female 2</option>
+            <option value="FV3">Female 3</option>
+            <option value="MV1">Male 1</option>
+            <option value="MV2">Male 2</option>
+            <option value="MV3">Male 3</option>
+          </select>
+        </div>
+        <button id="record" type="button" class="record">
+          <span class="dot" aria-hidden="true"></span><span id="record-label">Record</span>
+        </button>
+        <div class="meter" aria-hidden="true"><div id="meter-fill"></div></div>
+      </div>
+
+      <p id="message" class="message" role="status"></p>
+    </section>
+
+    <section id="result" class="card result" hidden>
+      <div class="result-head">
+        <div id="score" class="score">0</div>
+        <div>
+          <div id="verdict" class="verdict"></div>
+          <ul id="tips" class="tips"></ul>
+        </div>
+      </div>
+      <svg id="chart" class="chart" viewBox="0 0 600 260" role="img" aria-label="Pitch contour comparison"></svg>
+      <div class="legend">
+        <span><i class="swatch band"></i>Native speakers</span>
+        <span><i class="swatch you"></i>You</span>
+        <button id="play-mine" type="button" class="link">▶ Play my recording</button>
+      </div>
+    </section>
+
+    <section class="card history" id="history-card" hidden>
+      <h2>Recent attempts</h2>
+      <ol id="history"></ol>
+    </section>
+
+    <p class="note">
+      Tone Coach judges <strong>tones</strong> (pitch). It does not yet check consonants and vowels.
+      Reference audio: Tone Perfect, Michigan State University.
+    </p>
+  </main>
+
+  <dialog id="setup">
+    <form method="dialog" class="setup">
+      <h2>Set up your voice</h2>
+      <p>Everyone's voice sits at a different pitch. Say these four syllables so Tone Coach learns what is high and low <em>for you</em>.</p>
+      <ol id="setup-steps" class="setup-steps"></ol>
+      <p id="setup-message" class="message" role="status"></p>
+      <div class="setup-actions">
+        <button value="skip" class="link">Skip for now</button>
+        <button id="setup-record" type="button" class="record"><span class="dot" aria-hidden="true"></span><span>Record</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
